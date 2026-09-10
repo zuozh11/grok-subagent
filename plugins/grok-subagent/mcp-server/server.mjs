@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.2";
 const MAX_AGENTS = 3;
 const MAX_RETAINED_FAILED_AGENTS = 3;
 const MAX_TEXT = 120_000;
@@ -73,7 +73,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grok_search",
-    description: "Run an isolated Grok 4.5 research task with X Search, web search, and web fetch from a private directory outside the current repository. Use for X/Twitter, Reddit, community sentiment, and real-time public research.",
+    description: "Run an isolated research task using models.web_search from ~/.grok/config.toml (fallback: grok-4.5) with X Search, web search, and web fetch from a private directory outside the current repository. Use for X/Twitter, Reddit, community sentiment, and real-time public research.",
     inputSchema: {
       type: "object",
       properties: {

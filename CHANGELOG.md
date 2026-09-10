@@ -1,3 +1,5 @@
+Search update (0.4.2): `grok_search` reads only `models.web_search` from `~/.grok/config.toml` and passes it as `--model`. Missing or blank values fall back to `grok-4.5`. No model connection settings are copied; search isolation and authentication behavior are unchanged.
+
 # Personal fork behavior (0.4.1)
 
 This fork uses `grok_spawn` for normal delegation. It launches `grok agent stdio`, inherits the host process environment and Grok configuration, and does not force a sandbox, model, approval mode, or leader setting. It is not read-only. Explicit model arguments still override the configured model. Shell aliases and environment variables unavailable to Codex are not imported. Interactive permission requests are cancelled and reported, not automatically approved.

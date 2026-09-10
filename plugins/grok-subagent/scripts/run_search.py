@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ from typing import Iterator
 DEFAULT_RETENTION_DAYS = 7
 DEFAULT_MAX_TURNS = 40
 DEFAULT_TIMEOUT = 600
-REQUIRED_MODEL = "grok-4.5"
+DEFAULT_MODEL = "grok-4.5"
 RUN_MARKER = ".grok-subagent-search-run-v1"
 KEEP_MARKER = "KEEP"
 RUN_ID_RE = re.compile(r"\A\d{8}T\d{6}Z-[0-9a-f]{32}\Z")
@@ -240,6 +241,15 @@ def _persist_refreshed_auth(isolated_auth: Path, real_auth: Path) -> None:
     private_write(real_auth, content)
 
 
+def search_model() -> str:
+    config_path = Path.home() / ".grok" / "config.toml"
+    if not config_path.exists():
+        return DEFAULT_MODEL
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    value = config.get("models", {}).get("web_search")
+    return value.strip() if isinstance(value, str) and value.strip() else DEFAULT_MODEL
+
+
 @contextmanager
 def isolated_environment(run_dir: Path) -> Iterator[dict[str, str]]:
     """Expose only Grok auth and a minimal config; never expose the user's project."""
@@ -423,6 +433,7 @@ def run_grok(args: argparse.Namespace) -> int:
     if since and since > until:
         raise BridgeError("invalid_arguments", "--since must not be later than --until.")
 
+    model = search_model()
     grok = find_grok()
     cache_root = ensure_cache_root()
     removed = cleanup_expired(cache_root, args.retention_days)
@@ -441,7 +452,7 @@ def run_grok(args: argparse.Namespace) -> int:
             "until": iso_utc(until),
         },
         "status": "running",
-        "grok_model": REQUIRED_MODEL,
+        "grok_model": model,
         "grok_session_id": session_id,
         "cwd": str(run_dir),
         "isolated_home": True,
@@ -464,7 +475,7 @@ def run_grok(args: argparse.Namespace) -> int:
         "MCPTool",
         "--always-approve",
         "--model",
-        REQUIRED_MODEL,
+        model,
         "--output-format",
         "json",
         "--no-memory",
