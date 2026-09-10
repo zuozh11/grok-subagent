@@ -1,3 +1,11 @@
+# Personal fork behavior (0.4.1)
+
+This fork uses `grok_spawn` for normal delegation. It launches `grok agent stdio`, inherits the host process environment and Grok configuration, and does not force a sandbox, model, approval mode, or leader setting. It is not read-only. Explicit model arguments still override the configured model. Shell aliases and environment variables unavailable to Codex are not imported. Interactive permission requests are cancelled and reported, not automatically approved.
+
+Live tests on Grok 1.0.25 confirmed two-turn context retention. Sending during a running turn is rejected; wait or cancel before following up. Legacy worker/search/interactive tools retain their specialized behavior; use `grok_spawn` for this fork's normal workflow. The upstream documentation below describes those legacy defaults where it differs.
+
+Local source: this repository. Install with `codex plugin marketplace add "$PWD"` then `codex plugin add grok-subagent@zuozhi-grok`. Start a new Codex task after installation.
+
 # Security policy
 
 ## Supported versions

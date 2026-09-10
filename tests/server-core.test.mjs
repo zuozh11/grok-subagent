@@ -18,23 +18,10 @@ import {
   waitForRevision
 } from "../plugins/grok-subagent/mcp-server/server.mjs";
 
-test("child environment excludes unrelated secrets and supports explicit passthrough", () => {
-  const env = buildChildEnv({
-    PATH: "/usr/bin",
-    HOME: "/tmp/home",
-    XAI_API_KEY: "xai-test",
-    AWS_SECRET_ACCESS_KEY: "do-not-pass",
-    CUSTOM_CA_MODE: "strict",
-    GROK_PASSTHROUGH_ENV: "CUSTOM_CA_MODE"
-  });
-
-  assert.deepEqual(env, {
-    PATH: "/usr/bin",
-    HOME: "/tmp/home",
-    XAI_API_KEY: "xai-test",
-    CUSTOM_CA_MODE: "strict"
-  });
-  assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
+test("child environment inherits host configuration", () => {
+  const source = { PATH: "/usr/bin", GROK_HOME: "/tmp/custom-grok", CUSTOM_CA_MODE: "strict" };
+  assert.deepEqual(buildChildEnv(source), source);
+  assert.notEqual(buildChildEnv(source), source);
 });
 
 test("credential-shaped text is redacted", () => {
@@ -62,8 +49,8 @@ test("MCP protocol negotiation never echoes an unsupported version", () => {
 
 test("tool annotations reflect process and writing side effects", () => {
   const byName = Object.fromEntries(TOOL_DEFINITIONS.map(tool => [tool.name, tool]));
-  assert.equal(byName.grok_spawn_readonly.annotations.readOnlyHint, false);
-  assert.equal(byName.grok_spawn_readonly.annotations.destructiveHint, false);
+  assert.equal(byName.grok_spawn.annotations.readOnlyHint, false);
+  assert.equal(byName.grok_spawn.annotations.destructiveHint, true);
   assert.equal(byName.grok_send.annotations.destructiveHint, true);
   assert.equal(byName.grok_handoff_interactive.annotations.destructiveHint, true);
   assert.equal(byName.grok_close.annotations.idempotentHint, false);

@@ -8,41 +8,32 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const MAX_AGENTS = 3;
 const MAX_RETAINED_FAILED_AGENTS = 3;
 const MAX_TEXT = 120_000;
 const MAX_STDERR = 12_000;
 const CANCEL_TIMEOUT_MS = 10_000;
 const SUPPORTED_MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-const CHILD_ENV_KEYS = [
-  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
-  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
-  "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR",
-  "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
-  "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
-  "https_proxy", "http_proxy", "all_proxy", "no_proxy",
-  "__CF_USER_TEXT_ENCODING", "XAI_API_KEY"
-];
 const agents = new Map();
 
 const TOOL_DEFINITIONS = [
   {
-    name: "grok_spawn_readonly",
-    description: "Start an authenticated Grok Build agent in an OS-enforced read-only sandbox. Returns immediately after ACP setup while the prompt runs in the background.",
+    name: "grok_spawn",
+    description: "Start Grok Build using the user's normal configuration and permissions, without forcing sandbox, model or approval settings. Returns immediately after ACP setup while the prompt runs in the background.",
     inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "Bounded task and expected output." },
         cwd: { type: "string", description: "Absolute project directory Grok may inspect." },
         role: { type: "string", description: "Short specialist role, such as reviewer or investigator." },
-        model: { type: "string", description: "Optional Grok Build model ID. Defaults to GROK_MODEL or grok-4.5." },
+        model: { type: "string", description: "Optional Grok Build model ID. Defaults to the user's Grok configuration." },
         timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 }
       },
       required: ["task", "cwd"],
       additionalProperties: false
     },
-    annotations: { title: "Start project-read-only Grok agent", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    annotations: { title: "Start configured Grok agent", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   },
   {
     name: "grok_spawn_worker",
@@ -54,7 +45,7 @@ const TOOL_DEFINITIONS = [
         worktree: { type: "string", description: "Absolute path to a linked Git worktree; primary checkouts are rejected." },
         confirm_write_scope: { type: "boolean", description: "Must be true after the user explicitly authorizes Grok to edit this worktree." },
         role: { type: "string", description: "Short specialist role." },
-        model: { type: "string", description: "Optional Grok Build model ID. Defaults to GROK_MODEL or grok-4.5." },
+        model: { type: "string", description: "Optional Grok Build model ID. Defaults to the user's Grok configuration." },
         timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 900 }
       },
       required: ["task", "worktree", "confirm_write_scope"],
@@ -242,18 +233,7 @@ function assertGitRepositoryRoot(input) {
 }
 
 function buildChildEnv(source = process.env) {
-  const env = {};
-  for (const key of CHILD_ENV_KEYS) {
-    if (source[key] !== undefined) env[key] = source[key];
-  }
-  const extraKeys = String(source.GROK_PASSTHROUGH_ENV || "")
-    .split(",")
-    .map(key => key.trim())
-    .filter(key => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
-  for (const key of extraKeys) {
-    if (source[key] !== undefined) env[key] = source[key];
-  }
-  return env;
+  return { ...source };
 }
 
 function negotiateProtocolVersion(requested) {
@@ -350,8 +330,8 @@ class GrokAgent {
     this.id = randomUUID();
     this.cwd = cwd;
     this.mode = mode;
-    this.role = cleanText(role || (mode === "readonly" ? "independent investigator" : "isolated implementation worker"));
-    this.model = model || process.env.GROK_MODEL || "grok-4.5";
+    this.role = cleanText(role || (mode === "native" ? "independent investigator" : "isolated implementation worker"));
+    this.model = model || null;
     this.timeoutSeconds = timeoutSeconds;
     this.status = "starting";
     this.sessionId = null;
@@ -372,8 +352,7 @@ class GrokAgent {
 
   async start() {
     const binary = findGrok();
-    const sandbox = this.mode === "readonly" ? "read-only" : "workspace";
-    const args = ["--no-auto-update", "--sandbox", sandbox, "agent", "--model", this.model, "--always-approve", "--no-leader", "stdio"];
+    const args = ["agent", ...(this.model ? ["--model", this.model] : []), "stdio"];
     this.proc = spawn(binary, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildChildEnv() });
     this.proc.stderr.setEncoding("utf8");
     this.proc.stderr.on("data", chunk => { this.stderr = appendBounded(this.stderr, chunk, MAX_STDERR); });
@@ -391,8 +370,8 @@ class GrokAgent {
       `You are acting as a ${this.role} under Codex orchestration.`,
       "Do not spawn or delegate to other agents.",
       "Do not expose private chain-of-thought; provide concise conclusions and verifiable evidence.",
-      this.mode === "readonly"
-        ? "This session is read-only. Do not attempt to modify project files."
+      this.mode === "native"
+        ? "Use the user-configured Grok permissions. Only perform the task explicitly delegated by Codex."
         : "Modify only the requested files inside this isolated linked worktree. Do not commit, push, merge, or alter other worktrees."
     ].join("\n");
     const session = await this.request("session/new", { cwd: this.cwd, mcpServers: [], _meta: { rules } }, 30_000);
@@ -439,10 +418,10 @@ class GrokAgent {
   }
 
   handleAgentRequest(message) {
-    const options = message.params?.options || [];
-    const allowed = options.find(option => ["allow_once", "allow", "approved"].includes(option.kind));
-    if (message.method.includes("permission") && allowed) {
-      this.write({ jsonrpc: "2.0", id: message.id, result: { outcome: { outcome: "selected", optionId: allowed.optionId } } });
+    if (message.method.includes("permission")) {
+      this.text = appendBounded(this.text, "\nGrok requested interactive permission; this bridge did not approve it. Use the terminal to approve or change your Grok configuration.\n");
+      this.touch();
+      this.write({ jsonrpc: "2.0", id: message.id, result: { outcome: { outcome: "cancelled" } } });
     } else {
       this.write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Unsupported client method" } });
     }
@@ -610,13 +589,13 @@ async function spawnAgent(args, mode) {
   if (activeAgents.length >= MAX_AGENTS) throw new Error(`At most ${MAX_AGENTS} Grok agents may be open. Close one first.`);
   if (typeof args.task !== "string" || !args.task.trim()) throw new Error("task is required.");
   if (mode === "worker" && args.confirm_write_scope !== true) throw new Error("confirm_write_scope must be true after explicit user authorization.");
-  const cwd = mode === "readonly" ? absoluteDirectory(args.cwd, "cwd") : assertLinkedWorktree(args.worktree);
+  const cwd = mode === "native" ? absoluteDirectory(args.cwd, "cwd") : assertLinkedWorktree(args.worktree);
   const agent = new GrokAgent({
     cwd,
     mode,
     role: args.role,
     model: args.model,
-    timeoutSeconds: clamp(args.timeout_seconds, 30, 1800, mode === "readonly" ? 600 : 900)
+    timeoutSeconds: clamp(args.timeout_seconds, 30, 1800, mode === "native" ? 600 : 900)
   });
   agents.set(agent.id, agent);
   try {
@@ -730,7 +709,7 @@ function showSearchRun(args = {}) {
 
 async function callTool(name, args = {}) {
   switch (name) {
-    case "grok_spawn_readonly": return spawnAgent(args, "readonly");
+    case "grok_spawn": return spawnAgent(args, "native");
     case "grok_spawn_worker": return spawnAgent(args, "worker");
     case "grok_handoff_interactive": return launchInteractiveHandoff(args);
     case "grok_search": return callSearch(args);

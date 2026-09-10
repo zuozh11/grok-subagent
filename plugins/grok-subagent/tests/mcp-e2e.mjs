@@ -24,7 +24,7 @@ try {
   }
   assert(guardWorked, "writing guard did not reject a non-linked-worktree target");
 
-  const started = await client.call("grok_spawn_readonly", {
+  const started = await client.call("grok_spawn", {
     cwd: target,
     role: "installation test reviewer",
     model: "grok-4.5",
